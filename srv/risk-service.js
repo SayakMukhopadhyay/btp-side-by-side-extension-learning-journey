@@ -28,4 +28,69 @@ module.exports = cds.service.impl(async function () {
             }
         });
     });
+
+    const BPsrv = await cds.connect.to("API_BUSINESS_PARTNER");
+
+    this.on('READ', BusinessPartners, async (req) => {
+        req.query.where("LastName <> '' and FirstName <> '' ");
+
+        return await BPsrv.transaction(req).send({
+            query: req.query,
+            headers: {
+                apikey: process.env.apikey
+            }
+        })
+    })
+
+    this.on('READ', Risks, async (req, next) => {
+        if (!req.query.SELECT.columns) {
+            return next();
+        }
+
+        const expandIndex = req.query.SELECT.columns.findIndex(({ expand, ref }) => {
+            return expand && ref[0] === 'bp';
+        });
+
+        if (expandIndex < 0) {
+            return next();
+        }
+
+        req.query.SELECT.columns.splice(expandIndex, 1);
+
+        if (!req.query.SELECT.columns.find((column) => {
+            return column.ref.find((ref) => {
+                return ref === 'bp_BusinessPartner';
+            });
+        })) {
+            req.query.SELECT.columns.push({ ref: ['bp_BusinessPartner'] });
+        }
+
+        const risks = await next();
+
+        const asArray = (x) => {
+            return Array.isArray(x) ? x : [x]
+        }
+
+        const bpIDs = asArray(risks).map(risk => {
+            return risk.bp_BusinessPartner;
+        });
+
+        const businessPartners = await BPsrv.transaction(req).send({
+            query: SELECT.from(this.entities.BusinessPartners).where({ BusinessPartner: bpIDs }),
+            headers: {
+                apikey: process.env.apikey
+            }
+        });
+
+        const bpMap = {};
+        for (const businessPartner of businessPartners) {
+            bpMap[businessPartner.BusinessPartner] = businessPartner;
+        }
+
+        for (const note of asArray(risks)) {
+            note.bp = bpMap[note.bp_BusinessPartner];
+        }
+
+        return risks;
+    })
 });
